@@ -42,8 +42,25 @@ Changes take effect the next time the container is created: run option 3, or opt
 | `SQL_PORT` | `1433` | Port on your PC. Connect to `localhost,<port>`. Change it if a local SQL Server already uses 1433. |
 | `CONTAINER_NAME` | `sqlserver` | Name of the Docker container, also used as the server name. |
 | `SQL_IMAGE` | `mcr.microsoft.com/mssql/server:2022-latest` | SQL Server version. Other tags: `2025-latest`, `2019-latest`, or a pinned build from the image's tag list. A newer version can open databases from an older one, never the reverse. |
-| `MSSQL_PID` | `Developer` | Edition: `Developer` (free, all features, not for production), `Express` (free, limited), `Standard`, `Enterprise`, `EnterpriseCore`, `Evaluation`, or a product key. |
+| `MSSQL_PID` | `Developer` | Edition to run, or a product key. See [SQL Server editions](#sql-server-editions). |
 | `MSSQL_DIR` | `./mssql` | Folder on your PC that is mounted into the container. Either relative to the script's folder (`./mssql`, `..\sql-data`) or absolute (`D:\SQL Data`, `D:/SQL Data`). Paths with spaces work, with or without quotes. |
+
+## SQL Server editions
+
+Values for `MSSQL_PID`. Limits are for SQL Server 2022, the default image; newer versions raise some of them.
+
+| Edition | Cost | Meant for | Limits |
+|---|---|---|---|
+| `Developer` | Free | Development and testing only, not production | None: every Enterprise feature |
+| `Express` | Free | Small production apps | 10 GB per database, 1 socket or 4 cores, about 1.4 GB of memory for data, no SQL Agent |
+| `Standard` | Paid license | Production | Up to 24 cores and 128 GB of memory for data, fewer high-end features |
+| `Enterprise` | Paid license (server + CALs) | Production | All features, but uses at most 20 cores |
+| `EnterpriseCore` | Paid license (per core) | Production | All features, no core limit |
+| `Evaluation` | Free for 180 days | Trying Enterprise | All features, stops working after 180 days |
+
+- The paid editions only tell SQL Server which edition to run as. You need a license you own to use them. A product key instead of a name runs the edition that key belongs to.
+- A database over an edition's limit won't attach or restore, for example one over 10 GB on Express.
+- To switch, change `MSSQL_PID` and run option 3. Your databases come back under the new edition.
 
 ## Good to know
 
