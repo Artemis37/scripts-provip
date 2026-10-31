@@ -1,0 +1,5 @@
+# Holds the sa password
+.env
+
+# Database files, backups and logs (default MSSQL_DIR)
+/mssql/
