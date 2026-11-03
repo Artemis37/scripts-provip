@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Continue'
 # Key -> tool. Each script runs its own menu and returns here when Q is pressed.
 $Modules = [ordered]@{
     '1' = @{ Name = 'SQL Server'; About = 'SQL Server in Docker, databases kept on this PC'; Script = 'sqlserver\sqlserver.ps1' }
-    '2' = @{ Name = 'Azurite';    About = 'Azure Storage emulator (blob, queue, table) in Docker'; Script = 'azurite\azurite.ps1' }
+    '2' = @{ Name = 'Azurite';    About = 'Azure Storage emulator + Durable Functions Monitor'; Script = 'azurite\azurite.ps1' }
 }
 
 # '#' is drawn as a full block; the file itself stays ASCII so Windows PowerShell reads it correctly.

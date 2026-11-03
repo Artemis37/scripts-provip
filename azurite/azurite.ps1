@@ -1,16 +1,19 @@
 <#
 .SYNOPSIS
-    Menu to install and uninstall Azurite, the Azure Storage emulator, running in Docker.
+    Menu to install and uninstall Azurite, the Azure Storage emulator, and Durable Functions Monitor
+    with Docker Compose.
 
 .DESCRIPTION
-    Azurite serves Blob, Queue and Table storage on the standard emulator ports, so apps connect with
-    UseDevelopmentStorage=true. Its data lives in the data folder next to this script and is kept
-    when Azurite is uninstalled:
+    compose.yaml next to this script defines two containers:
 
-        azurite\data -> /data
+        azurite   Blob, Queue and Table storage on the standard emulator ports, so apps connect with
+                  UseDevelopmentStorage=true. Its data lives in the data folder next to this script
+                  and is kept when Azurite is uninstalled:  azurite\data -> /data
+        dfmon     Durable Functions Monitor on http://localhost:7072, showing the Durable Functions
+                  task hubs stored in Azurite.
 
-    There is no .env: the standard ports are what UseDevelopmentStorage=true expects. To change the
-    container name, image or ports, edit the settings below.
+    There is no .env: the standard ports are what UseDevelopmentStorage=true expects. To change
+    images or ports, edit compose.yaml, and the ports below to match.
 
     Requires Docker Desktop running Linux containers.
 
@@ -27,61 +30,88 @@ $ErrorActionPreference = 'Continue'
 
 . (Join-Path $PSScriptRoot '..\helper\common.ps1')
 
-$Container = 'azurite'
-$Image     = 'mcr.microsoft.com/azure-storage/azurite'
-$DataDir   = Join-Path $PSScriptRoot 'data'
-$Ports     = [ordered]@{ Blob = 10000; Queue = 10001; Table = 10002 }
+$ComposeFile = Join-Path $PSScriptRoot 'compose.yaml'
+$DataDir     = Join-Path $PSScriptRoot 'data'
+
+# Container names and published ports, as set in compose.yaml
+$Container   = 'azurite'
+$Monitor     = 'dfmon'
+$Ports       = [ordered]@{ Blob = 10000; Queue = 10001; Table = 10002 }
+$MonitorPort = 7072
+$MonitorUrl  = "http://localhost:$MonitorPort"
 
 # ------------------------------------------------------------------ docker helpers
 
-function Get-ContainerState {
-    $state = & docker inspect --format '{{.State.Status}}' $Container 2>$null
+function Invoke-Compose { & docker compose -f $ComposeFile @args }
+
+function Get-ContainerState([string]$Name) {
+    $state = & docker inspect --format '{{.State.Status}}' $Name 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
     return "$state".Trim()
 }
 
 function Get-StatusText {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return 'Docker not installed' }
-    $state = Get-ContainerState
-    if ($state) { return $state }
     & docker version --format '{{.Server.Version}}' *> $null
     if ($LASTEXITCODE -ne 0) { return 'Docker not running' }
-    return 'not installed'
+    $states = [ordered]@{}
+    foreach ($name in $Container, $Monitor) { $states[$name] = Get-ContainerState $name }
+    if (-not ($states.Values | Where-Object { $_ })) { return 'not installed' }
+    return (@($states.Keys | ForEach-Object {
+                $state = $states[$_]
+                if (-not $state) { $state = 'not installed' }
+                "$_ ($state)"
+            }) -join ', ')
 }
 
-# Any HTTP answer, even an error status (Azurite wants a signed request), means the service is up.
-# Docker's port forwarder accepts connections before Azurite listens, so a plain TCP check isn't enough.
-function Test-ServiceUp([int]$Port) {
+# The previous version of this script created the azurite container with docker run. Compose can't
+# take that container over, so it is removed; the data folder stays.
+function Remove-OldContainer {
+    $labels = & docker inspect --format '{{json .Config.Labels}}' $Container 2>$null
+    if ($LASTEXITCODE -ne 0 -or "$labels" -match 'com\.docker\.compose\.project') { return }
+    Write-Info "Removing the '$Container' container made by the previous version of this script (data stays)..."
+    & docker stop $Container | Out-Null
+    & docker rm $Container | Out-Null
+}
+
+# HTTP status from a local port, or 0 when nothing answers. Docker's port forwarder accepts
+# connections before the service inside listens, so a plain TCP check isn't enough.
+function Get-HttpStatus([int]$Port) {
     $ProgressPreference = 'SilentlyContinue'
     try {
-        Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 3 | Out-Null
-        return $true
+        return [int](Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 3).StatusCode
     } catch {
-        return $null -ne $_.Exception.Response
+        if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode }
+        return 0
     }
 }
 
-function Wait-AzuriteReady([int]$TimeoutSeconds = 60) {
-    Write-Host '  Waiting for Azurite to answer' -NoNewline -ForegroundColor Cyan
+# Azurite answers as soon as it listens (with an error status: requests must be signed).
+# The monitor counts once it serves its page (200), so an error page from its Functions host doesn't.
+function Wait-Ready([int]$TimeoutSeconds = 120) {
+    Write-Host '  Waiting for Azurite and the monitor to answer' -NoNewline -ForegroundColor Cyan
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        $state = Get-ContainerState
-        if ($state -ne 'running') {
-            Write-Host ''
-            Write-Err "The container is not running (state: $state). Last lines of its log:"
-            & docker logs --tail 25 $Container 2>&1 | ForEach-Object { Write-Host "    $_" }
-            return $false
+        foreach ($name in $Container, $Monitor) {
+            $state = Get-ContainerState $name
+            if ($state -ne 'running') {
+                Write-Host ''
+                Write-Err "Container '$name' is not running (state: $state). Last lines of its log:"
+                & docker logs --tail 25 $name 2>&1 | ForEach-Object { Write-Host "    $_" }
+                return $false
+            }
         }
-        if (@($Ports.Values | Where-Object { -not (Test-ServiceUp $_) }).Count -eq 0) {
+        $azuriteUp = @($Ports.Values | Where-Object { (Get-HttpStatus $_) -eq 0 }).Count -eq 0
+        if ($azuriteUp -and (Get-HttpStatus $MonitorPort) -eq 200) {
             Write-Host ' ready.' -ForegroundColor Green
             return $true
         }
         Write-Host '.' -NoNewline -ForegroundColor Cyan
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds 2
     }
     Write-Host ''
-    Write-Err "Azurite did not answer within $TimeoutSeconds seconds."
-    Write-Warn "Check the log with: docker logs $Container"
+    Write-Err "Not ready within $TimeoutSeconds seconds."
+    Write-Warn "Check the logs with: docker compose -f `"$ComposeFile`" logs"
     return $false
 }
 
@@ -91,6 +121,7 @@ function Show-ConnectionInfo {
         Write-Host ('  {0,-9} : http://127.0.0.1:{1}/devstoreaccount1' -f $service, $Ports[$service])
     }
     Write-Host '  Conn str  : UseDevelopmentStorage=true'
+    Write-Host "  Monitor   : $MonitorUrl  (option 3 opens it)"
     Write-Host "  Data      : $DataDir"
 }
 
@@ -98,69 +129,61 @@ function Show-ConnectionInfo {
 
 function Install-Azurite {
     if (-not (Test-Docker)) { return }
-    $state = Get-ContainerState
-    if ($state -eq 'running') {
-        Write-Ok "Azurite is already installed and running (container '$Container')."
+    if ((Get-ContainerState $Container) -eq 'running' -and (Get-ContainerState $Monitor) -eq 'running') {
+        Write-Ok 'Azurite and Durable Functions Monitor are already installed and running.'
         Show-ConnectionInfo
         return
     }
+    Remove-OldContainer
 
-    if ($state) {
-        Write-Info "Starting the existing container '$Container'..."
-        & docker start $Container | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-Err 'Could not start the container. Uninstall Azurite, then install it again.'; return }
-    } else {
-        $busy = @($Ports.Values | Where-Object { Test-PortInUse $_ })
-        if ($busy.Count -gt 0) {
-            Write-Err "Already in use on this PC: port $($busy -join ', ') (another Azurite, maybe the one Visual Studio starts?)."
-            Write-Warn 'Stop whatever is using it and try again.'
-            return
-        }
-
-        & docker image inspect $Image *> $null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Info "Downloading $Image (first time only)..."
-            & docker pull $Image
-            if ($LASTEXITCODE -ne 0) { Write-Err 'Image download failed.'; return }
-        }
-
-        if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
-        Write-Info "Creating container '$Container'..."
-        # Published on 127.0.0.1 only: every Azurite has the same well-known account key.
-        $publish = foreach ($port in $Ports.Values) { '-p'; "127.0.0.1:${port}:$port" }
-        # --skipApiVersionCheck: newer Azure SDKs send API versions this Azurite may not know yet
-        $out = & docker run -d --name $Container @publish -v "${DataDir}:/data" --restart unless-stopped $Image `
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data --skipApiVersionCheck 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Err 'docker run failed:'
-            $out | ForEach-Object { Write-Host "    $_" }
-            & docker rm -f $Container *> $null
-            return
-        }
+    # Ports of the containers that aren't running yet must be free
+    $needed = @()
+    if ((Get-ContainerState $Container) -ne 'running') { $needed += @($Ports.Values) }
+    if ((Get-ContainerState $Monitor) -ne 'running') { $needed += $MonitorPort }
+    $busy = @($needed | Where-Object { Test-PortInUse $_ })
+    if ($busy.Count -gt 0) {
+        Write-Err "Already in use on this PC: port $($busy -join ', ')."
+        Write-Warn 'Stop whatever is using it (often another Azurite, like the one Visual Studio starts) and try again.'
+        return
     }
 
-    if (Wait-AzuriteReady) { Show-ConnectionInfo }
+    if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
+    Write-Info 'Starting Azurite and Durable Functions Monitor (the first run downloads the images)...'
+    Invoke-Compose up -d
+    if ($LASTEXITCODE -ne 0) { Write-Err 'docker compose up failed (see the messages above).'; return }
+
+    if (Wait-Ready) { Show-ConnectionInfo }
 }
 
 function Uninstall-Azurite {
     if (-not (Test-Docker)) { return }
-    if (-not (Get-ContainerState)) {
-        Write-Info "There is no container named '$Container'."
+    if (-not (Get-ContainerState $Container) -and -not (Get-ContainerState $Monitor)) {
+        Write-Info 'Azurite and Durable Functions Monitor are not installed.'
     } else {
-        Write-Warn "This removes container '$Container'. Your data stays in $DataDir."
+        Write-Warn "This removes the '$Container' and '$Monitor' containers. Your data stays in $DataDir."
         if ((Read-Host '  Continue? (y/N)') -notmatch '^(y|yes)$') { Write-Info 'Cancelled.'; return }
-        & docker stop $Container | Out-Null
-        & docker rm $Container | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-Err 'Could not remove the container.'; return }
-        Write-Ok 'Container removed. Option 1 creates it again with the same data.'
+        Remove-OldContainer
+        Invoke-Compose down
+        if ($LASTEXITCODE -ne 0) { Write-Err 'docker compose down failed (see the messages above).'; return }
+        Write-Ok 'Containers removed. Option 1 creates them again with the same data.'
     }
 
-    & docker image inspect $Image *> $null
-    if ($LASTEXITCODE -eq 0) {
-        if ((Read-Host "  Also delete the image $Image to free disk space? (y/N)") -match '^(y|yes)$') {
-            & docker rmi $Image
+    $images = @(Invoke-Compose config --images | Where-Object { & docker image inspect $_ *> $null; $LASTEXITCODE -eq 0 })
+    if ($images.Count -gt 0) {
+        if ((Read-Host "  Also delete the images $($images -join ', ') to free disk space? (y/N)") -match '^(y|yes)$') {
+            & docker rmi @images
         }
     }
+}
+
+function Open-Monitor {
+    if (-not (Test-Docker)) { return }
+    if ((Get-ContainerState $Monitor) -ne 'running') {
+        Write-Warn 'Durable Functions Monitor is not running - use option 1 to install or start it.'
+        return
+    }
+    Write-Info "Opening $MonitorUrl in your browser..."
+    Start-Process $MonitorUrl
 }
 
 # ------------------------------------------------------------------ menu
@@ -169,14 +192,16 @@ function Show-Menu {
     $status = Get-StatusText
     Write-Host ''
     Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host '   Azurite (Azure Storage emulator) in Docker'
+    Write-Host '   Azurite + Durable Functions Monitor (Docker Compose)'
     Write-Host '  ================================================' -ForegroundColor DarkCyan
-    Write-Host "   Container : $Container ($status)"
+    Write-Host "   Status    : $status"
     Write-Host "   Ports     : $(($Ports.Keys | ForEach-Object { "$($_.ToLower()) $($Ports[$_])" }) -join ', ')"
+    Write-Host "   Monitor   : $MonitorUrl"
     Write-Host "   Data      : $DataDir"
     Write-Host '  ------------------------------------------------' -ForegroundColor DarkCyan
-    Write-Host '   1) Install Azurite'
+    Write-Host '   1) Install Azurite and Durable Functions Monitor'
     Write-Host '   2) Uninstall (data is kept)'
+    Write-Host '   3) Open Durable Functions Monitor in the browser'
     if ($FromDevMenu) { Write-Host '   Q) Back to the dev menu' } else { Write-Host '   Q) Quit' }
     Write-Host ''
 }
@@ -185,13 +210,14 @@ function Start-Menu {
     $actions = @{
         '1' = 'Install-Azurite'
         '2' = 'Uninstall-Azurite'
+        '3' = 'Open-Monitor'
     }
     while ($true) {
         Show-Menu
         $choice = Read-MenuKey
         if ($null -eq $choice) { return }   # input closed
         if ($choice -eq 'q') { if (-not $FromDevMenu) { Write-Host '  Bye.' }; return }
-        if (-not $actions.ContainsKey($choice)) { Write-Warn 'Choose 1, 2 or Q.'; continue }
+        if (-not $actions.ContainsKey($choice)) { Write-Warn 'Choose 1, 2, 3 or Q.'; continue }
 
         Write-Host ''
         try {
