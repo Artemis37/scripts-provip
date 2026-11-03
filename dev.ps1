@@ -12,7 +12,7 @@
 
 $ErrorActionPreference = 'Continue'
 
-. (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot 'helper\common.ps1')
 
 # Key -> tool. Each script runs its own menu and returns here when Q is pressed.
 $Modules = [ordered]@{

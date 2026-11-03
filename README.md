@@ -19,6 +19,13 @@ Needs Docker Desktop with Linux containers.
 
 ## Layout
 
-Each module keeps its script, its settings (`.env`, when it has any) and its data in its own folder, so they don't mix. `common.ps1` holds the helpers the menus share: key input, colored output, Docker checks.
+```
+dev.ps1             start here: the dev menu
+helper/common.ps1   helpers the menus share (key input, colored output, Docker checks); not run on its own
+sqlserver/          SQL Server module: script, README, .env, data
+azurite/            Azurite module: script, README, data
+```
 
-To add a module, create a folder with its script and README, then add a line to `$Modules` in `dev.ps1`. The dev menu runs the script with `-FromDevMenu`, so the script should accept that switch and return when Q is pressed.
+Each module keeps its script, its settings (`.env`, when it has any) and its data in its own folder, so they don't mix.
+
+To add a module, create a folder with its script and README, load the helpers with `. (Join-Path $PSScriptRoot '..\helper\common.ps1')`, then add a line to `$Modules` in `dev.ps1`. The dev menu runs the script with `-FromDevMenu`, so the script should accept that switch and return when Q is pressed.

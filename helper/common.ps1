@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Helpers shared by dev.ps1 and the module menus. Dot-source it: . (Join-Path $PSScriptRoot '..\common.ps1')
+    Helpers shared by dev.ps1 and the module menus. Dot-source it from a module: . (Join-Path $PSScriptRoot '..\helper\common.ps1')
 #>
 
 # ------------------------------------------------------------------ output helpers

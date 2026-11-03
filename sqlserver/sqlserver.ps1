@@ -31,7 +31,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-. (Join-Path $PSScriptRoot '..\common.ps1')
+. (Join-Path $PSScriptRoot '..\helper\common.ps1')
 
 $ScriptDir = $PSScriptRoot
 $EnvFile   = Join-Path $ScriptDir '.env'

@@ -25,7 +25,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-. (Join-Path $PSScriptRoot '..\common.ps1')
+. (Join-Path $PSScriptRoot '..\helper\common.ps1')
 
 $Container = 'azurite'
 $Image     = 'mcr.microsoft.com/azure-storage/azurite'
