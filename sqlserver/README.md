@@ -8,7 +8,7 @@ Needs Docker Desktop with Linux containers. Open it from the dev menu, or on its
 powershell -ExecutionPolicy Bypass -File .\sqlserver\sqlserver.ps1
 ```
 
-The first run creates `.env` in this folder with a random `sa` password.
+The first run creates `.env` in this folder with a random `sa` password. `.env` is git ignored; [`.env.example`](.env.example) lists every setting with its default.
 
 ## Menu
 
