@@ -21,10 +21,17 @@
     Requires Docker Desktop running Linux containers.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\sqlserver.ps1
+    powershell -ExecutionPolicy Bypass -File .\sqlserver\sqlserver.ps1
 #>
 
+param(
+    # Set by dev.ps1: Q goes back to the dev menu instead of quitting
+    [switch]$FromDevMenu
+)
+
 $ErrorActionPreference = 'Continue'
+
+. (Join-Path $PSScriptRoot '..\common.ps1')
 
 $ScriptDir = $PSScriptRoot
 $EnvFile   = Join-Path $ScriptDir '.env'
@@ -40,11 +47,6 @@ $script:SqlCmd = $null   # sqlcmd path + flags inside the container, found on fi
 
 # ------------------------------------------------------------------ output helpers
 
-function Write-Info([string]$Message) { Write-Host "  $Message" -ForegroundColor Cyan }
-function Write-Ok  ([string]$Message) { Write-Host "  $Message" -ForegroundColor Green }
-function Write-Warn([string]$Message) { Write-Host "  $Message" -ForegroundColor Yellow }
-function Write-Err ([string]$Message) { Write-Host "  $Message" -ForegroundColor Red }
-
 function Write-SqlOutput($Result) {
     foreach ($line in $Result.Output) { if ($line.Trim()) { Write-Host "    $line" } }
 }
@@ -54,10 +56,6 @@ function Write-VersionHint($Result) {
         Write-Warn "These files come from a newer SQL Server than $($Config.Image)."
         Write-Warn 'Set SQL_IMAGE in .env to a newer tag (e.g. 2025-latest), then run option 3.'
     }
-}
-
-function Clear-Screen {
-    if (-not [Console]::IsOutputRedirected) { try { Clear-Host } catch { } }
 }
 
 # ------------------------------------------------------------------ .env
@@ -162,23 +160,6 @@ function ConvertTo-DbPath([string]$HostPath) { ConvertTo-ContainerPath $HostPath
 
 # ------------------------------------------------------------------ docker / sql helpers
 
-function Test-Docker {
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        Write-Err 'Docker was not found. Install Docker Desktop: https://www.docker.com/products/docker-desktop/'
-        return $false
-    }
-    $os = & docker info --format '{{.OSType}}' 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err 'Docker is installed but not running. Start Docker Desktop and try again.'
-        return $false
-    }
-    if ("$os".Trim() -ne 'linux') {
-        Write-Err 'Docker is using Windows containers. Right-click the Docker tray icon > "Switch to Linux containers".'
-        return $false
-    }
-    return $true
-}
-
 function Get-ContainerState {
     $state = & docker inspect --format '{{.State.Status}}' $Config.Container 2>$null
     if ($LASTEXITCODE -ne 0) { return $null }
@@ -192,10 +173,6 @@ function Get-StatusText {
     & docker version --format '{{.Server.Version}}' *> $null
     if ($LASTEXITCODE -ne 0) { return 'Docker not running' }
     return 'not installed'
-}
-
-function Test-PortInUse([int]$Port) {
-    try { return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop) } catch { return $false }
 }
 
 function Resolve-SqlCmd {
@@ -668,7 +645,7 @@ function Show-Menu {
     Write-Host '   3) Reload - fresh container with .env settings,'
     Write-Host '      attach every .mdf in the databases folder'
     Write-Host '   4) Restore a .bak file'
-    Write-Host '   Q) Quit'
+    if ($FromDevMenu) { Write-Host '   Q) Back to the dev menu' } else { Write-Host '   Q) Quit' }
     Write-Host ''
 }
 
@@ -687,10 +664,9 @@ function Start-Menu {
             Write-Err $_.Exception.Message
         }
 
-        $raw = Read-Host '  Choose an option'
-        if ($null -eq $raw -or ([Console]::IsInputRedirected -and $raw -eq '')) { return }   # input closed
-        $choice = $raw.Trim().ToLower()
-        if ($choice -eq 'q') { Write-Host '  Bye.'; return }
+        $choice = Read-MenuKey
+        if ($null -eq $choice) { return }   # input closed
+        if ($choice -eq 'q') { if (-not $FromDevMenu) { Write-Host '  Bye.' }; return }
         if (-not $actions.ContainsKey($choice)) { Write-Warn 'Choose 1, 2, 3, 4 or Q.'; continue }
 
         Write-Host ''
@@ -700,7 +676,7 @@ function Start-Menu {
             Write-Err "Unexpected error: $($_.Exception.Message)"
         }
         Write-Host ''
-        Read-Host '  Press Enter to return to the menu' | Out-Null
+        Wait-AnyKey
         Clear-Screen
     }
 }

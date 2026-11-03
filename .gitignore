@@ -1,5 +1,8 @@
-# Holds the sa password
+# Each module's settings (the SQL Server one holds the sa password)
 .env
 
-# Database files, backups and logs (default MSSQL_DIR)
-/mssql/
+# SQL Server database files, backups and logs (default MSSQL_DIR)
+mssql/
+
+# Azurite blob, queue and table data
+/azurite/data/
