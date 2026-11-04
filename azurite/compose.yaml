@@ -17,13 +17,13 @@ services:
       - ./data:/data
     restart: unless-stopped
 
-  # Shows the Durable Functions task hubs stored in Azurite: orchestrations, entities, history.
+  # Shows the Durable Functions task hubs of a storage account: orchestrations, entities, history.
   dfmon:
     image: scaletone/durablefunctionsmonitor:6.8
     container_name: dfmon
     environment:
-      # Azurite's well-known dev account, reached by its service name inside this compose network
-      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      # The account to show, from .env: the azurite service above by default, or a real account
+      AzureWebJobsStorage: "${STORAGE_CONNECTION_STRING:?Set STORAGE_CONNECTION_STRING in azurite/.env, see .env.example}"
       # Turns sign-in off. Fine while the port is published on 127.0.0.1 only.
       DFM_NONCE: i_sure_know_what_i_am_doing
     ports:

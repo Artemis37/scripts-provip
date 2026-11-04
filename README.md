@@ -23,7 +23,7 @@ Needs Docker Desktop with Linux containers.
 dev.ps1             start here: the dev menu
 helper/common.ps1   helpers the menus share (key input, colored output, Docker checks); not run on its own
 sqlserver/          SQL Server module: script, README, .env, data
-azurite/            Azurite module: script, compose.yaml, README, data
+azurite/            Azurite module: script, compose.yaml, README, .env, data
 ```
 
 Each module keeps its script, its settings (`.env`, when it has any) and its data in its own folder, so they don't mix.

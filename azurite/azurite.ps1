@@ -10,10 +10,10 @@
                   UseDevelopmentStorage=true. Its data lives in the data folder next to this script
                   and is kept when Azurite is uninstalled:  azurite\data -> /data
         dfmon     Durable Functions Monitor on http://localhost:7072, showing the Durable Functions
-                  task hubs stored in Azurite.
+                  task hubs of the storage account set in .env: Azurite by default, or a real account.
 
-    There is no .env: the standard ports are what UseDevelopmentStorage=true expects. To change
-    images or ports, edit compose.yaml, and the ports below to match.
+    .env next to this script is created from .env.example on first run and holds that connection
+    string. To change images or ports, edit compose.yaml, and the ports below to match.
 
     Requires Docker Desktop running Linux containers.
 
@@ -31,6 +31,7 @@ $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot '..\helper\common.ps1')
 
 $ComposeFile = Join-Path $PSScriptRoot 'compose.yaml'
+$EnvFile     = Join-Path $PSScriptRoot '.env'
 $DataDir     = Join-Path $PSScriptRoot 'data'
 
 # Container names and published ports, as set in compose.yaml
@@ -39,6 +40,32 @@ $Monitor     = 'dfmon'
 $Ports       = [ordered]@{ Blob = 10000; Queue = 10001; Table = 10002 }
 $MonitorPort = 7072
 $MonitorUrl  = "http://localhost:$MonitorPort"
+
+$LocalAccount = 'devstoreaccount1'
+
+# ------------------------------------------------------------------ .env
+
+# compose.yaml takes the monitor's connection string from .env, so every compose command needs the file.
+function Initialize-EnvFile {
+    if (Test-Path -LiteralPath $EnvFile) { return }
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '.env.example') -Destination $EnvFile
+    Write-Ok "Created $EnvFile. The monitor shows the local Azurite until you change it."
+}
+
+# The account name from .env, and only the name: the rest of that line holds the key.
+function Get-MonitorAccount {
+    $line = Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*STORAGE_CONNECTION_STRING\s*=' } | Select-Object -Last 1
+    if ("$line" -match 'AccountName=([^;"'']+)') { return $Matches[1] }
+    return 'see .env'
+}
+
+# Yellow when it isn't the local Azurite: the monitor has no sign-in and can change what it shows.
+function Write-MonitorInfo([string]$Indent) {
+    $account = Get-MonitorAccount
+    $line = "${Indent}Monitor   : $MonitorUrl  (account: $account)"
+    if ($account -eq $LocalAccount) { Write-Host $line } else { Write-Host $line -ForegroundColor Yellow }
+}
 
 # ------------------------------------------------------------------ docker helpers
 
@@ -121,7 +148,7 @@ function Show-ConnectionInfo {
         Write-Host ('  {0,-9} : http://127.0.0.1:{1}/devstoreaccount1' -f $service, $Ports[$service])
     }
     Write-Host '  Conn str  : UseDevelopmentStorage=true'
-    Write-Host "  Monitor   : $MonitorUrl  (option 3 opens it)"
+    Write-MonitorInfo '  '
     Write-Host "  Data      : $DataDir"
 }
 
@@ -129,11 +156,6 @@ function Show-ConnectionInfo {
 
 function Install-Azurite {
     if (-not (Test-Docker)) { return }
-    if ((Get-ContainerState $Container) -eq 'running' -and (Get-ContainerState $Monitor) -eq 'running') {
-        Write-Ok 'Azurite and Durable Functions Monitor are already installed and running.'
-        Show-ConnectionInfo
-        return
-    }
     Remove-OldContainer
 
     # Ports of the containers that aren't running yet must be free
@@ -148,7 +170,8 @@ function Install-Azurite {
     }
 
     if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
-    Write-Info 'Starting Azurite and Durable Functions Monitor (the first run downloads the images)...'
+    # Also when both are running: compose recreates only what .env or compose.yaml changed
+    Write-Info 'Starting or updating Azurite and Durable Functions Monitor (the first run downloads the images)...'
     Invoke-Compose up -d
     if ($LASTEXITCODE -ne 0) { Write-Err 'docker compose up failed (see the messages above).'; return }
 
@@ -196,10 +219,11 @@ function Show-Menu {
     Write-Host '  ================================================' -ForegroundColor DarkCyan
     Write-Host "   Status    : $status"
     Write-Host "   Ports     : $(($Ports.Keys | ForEach-Object { "$($_.ToLower()) $($Ports[$_])" }) -join ', ')"
-    Write-Host "   Monitor   : $MonitorUrl"
+    Write-MonitorInfo '   '
     Write-Host "   Data      : $DataDir"
     Write-Host '  ------------------------------------------------' -ForegroundColor DarkCyan
-    Write-Host '   1) Install Azurite and Durable Functions Monitor'
+    Write-Host '   1) Install Azurite and Durable Functions Monitor,'
+    Write-Host '      or apply changes in .env'
     Write-Host '   2) Uninstall (data is kept)'
     Write-Host '   3) Open Durable Functions Monitor in the browser'
     if ($FromDevMenu) { Write-Host '   Q) Back to the dev menu' } else { Write-Host '   Q) Quit' }
@@ -213,6 +237,7 @@ function Start-Menu {
         '3' = 'Open-Monitor'
     }
     while ($true) {
+        Initialize-EnvFile
         Show-Menu
         $choice = Read-MenuKey
         if ($null -eq $choice) { return }   # input closed
