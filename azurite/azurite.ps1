@@ -52,19 +52,67 @@ function Initialize-EnvFile {
     Write-Ok "Created $EnvFile. The monitor shows the local Azurite until you change it."
 }
 
-# The account name from .env, and only the name: the rest of that line holds the key.
-function Get-MonitorAccount {
+# What the monitor's connection string in .env points at. Only the settings named here are kept:
+# the rest of that line holds the key or SAS token.
+function Get-MonitorStorage {
     $line = Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue |
         Where-Object { $_ -match '^\s*STORAGE_CONNECTION_STRING\s*=' } | Select-Object -Last 1
-    if ("$line" -match 'AccountName=([^;"'']+)') { return $Matches[1] }
-    return 'see .env'
+    # The value, without a trailing comment or the quotes around it
+    $value = ("$line" -replace '^[^=]*=' -replace '\s+#.*$').Trim().Trim('"', "'")
+
+    $settings = @{}
+    foreach ($pair in $value -split ';') {
+        $name, $setting = $pair -split '=', 2
+        $name = $name.Trim()
+        if ($name -in 'DefaultEndpointsProtocol', 'AccountName', 'EndpointSuffix', 'BlobEndpoint', 'QueueEndpoint', 'TableEndpoint') {
+            $settings[$name] = "$setting".Trim()
+        }
+    }
+
+    $account  = $settings['AccountName']
+    $protocol = if ($settings['DefaultEndpointsProtocol']) { $settings['DefaultEndpointsProtocol'] } else { 'https' }
+    $suffix   = if ($settings['EndpointSuffix']) { $settings['EndpointSuffix'] } else { 'core.windows.net' }
+
+    # An endpoint in the string wins, else it follows from the account. With neither it isn't listed.
+    $endpoints = [ordered]@{}
+    foreach ($service in $Ports.Keys) {
+        $endpoint = $settings["${service}Endpoint"]
+        if ($endpoint) {
+            $endpoints[$service] = $endpoint -replace '\?.*$'   # a query string could be a SAS token
+        } elseif ($account) {
+            $endpoints[$service] = "${protocol}://${account}.$($service.ToLower()).${suffix}"
+        }
+    }
+
+    return [pscustomobject]@{
+        Account   = if ($account) { $account } else { 'see .env' }
+        # By name and host: an account elsewhere can have the same name
+        IsLocal   = $account -eq $LocalAccount -and $settings['BlobEndpoint'] -match "^https?://${Container}[:/]"
+        Endpoints = $endpoints
+    }
 }
 
 # Yellow when it isn't the local Azurite: the monitor has no sign-in and can change what it shows.
-function Write-MonitorInfo([string]$Indent) {
-    $account = Get-MonitorAccount
-    $line = "${Indent}Monitor   : $MonitorUrl  (account: $account)"
-    if ($account -eq $LocalAccount) { Write-Host $line } else { Write-Host $line -ForegroundColor Yellow }
+function Write-MonitorInfo([string]$Indent, $Storage) {
+    $line = "${Indent}Monitor   : $MonitorUrl  (account: $($Storage.Account))"
+    if ($Storage.IsLocal) { Write-Host $line } else { Write-Host $line -ForegroundColor Yellow }
+}
+
+function Get-PortsText {
+    return (@($Ports.Keys | ForEach-Object { "$($_.ToLower()) $($Ports[$_])" }) -join ', ')
+}
+
+# The monitor reads another account, so that account comes first. Azurite keeps running, so it is
+# still listed, as the separate thing it is. The connection string itself holds the key: never print it.
+function Write-OtherAccountInfo([string]$Indent, $Storage) {
+    Write-MonitorInfo $Indent $Storage
+    foreach ($service in $Storage.Endpoints.Keys) {
+        Write-Host ("${Indent}{0,-9} : {1}" -f $service, $Storage.Endpoints[$service])
+    }
+    Write-Host "${Indent}Conn str  : STORAGE_CONNECTION_STRING in $EnvFile"
+    Write-Host "${Indent}Azurite   : separate local emulator, not used by the monitor" -ForegroundColor DarkGray
+    Write-Host "${Indent}Ports     : $(Get-PortsText)" -ForegroundColor DarkGray
+    Write-Host "${Indent}Data      : $DataDir" -ForegroundColor DarkGray
 }
 
 # ------------------------------------------------------------------ docker helpers
@@ -144,11 +192,13 @@ function Wait-Ready([int]$TimeoutSeconds = 120) {
 
 function Show-ConnectionInfo {
     Write-Host ''
+    $storage = Get-MonitorStorage
+    if (-not $storage.IsLocal) { Write-OtherAccountInfo '  ' $storage; return }
     foreach ($service in $Ports.Keys) {
         Write-Host ('  {0,-9} : http://127.0.0.1:{1}/devstoreaccount1' -f $service, $Ports[$service])
     }
     Write-Host '  Conn str  : UseDevelopmentStorage=true'
-    Write-MonitorInfo '  '
+    Write-MonitorInfo '  ' $storage
     Write-Host "  Data      : $DataDir"
 }
 
@@ -218,9 +268,14 @@ function Show-Menu {
     Write-Host '   Azurite + Durable Functions Monitor (Docker Compose)'
     Write-Host '  ================================================' -ForegroundColor DarkCyan
     Write-Host "   Status    : $status"
-    Write-Host "   Ports     : $(($Ports.Keys | ForEach-Object { "$($_.ToLower()) $($Ports[$_])" }) -join ', ')"
-    Write-MonitorInfo '   '
-    Write-Host "   Data      : $DataDir"
+    $storage = Get-MonitorStorage
+    if ($storage.IsLocal) {
+        Write-Host "   Ports     : $(Get-PortsText)"
+        Write-MonitorInfo '   ' $storage
+        Write-Host "   Data      : $DataDir"
+    } else {
+        Write-OtherAccountInfo '   ' $storage
+    }
     Write-Host '  ------------------------------------------------' -ForegroundColor DarkCyan
     Write-Host '   1) Install Azurite and Durable Functions Monitor,'
     Write-Host '      or apply changes in .env'

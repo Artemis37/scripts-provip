@@ -69,7 +69,7 @@ To change an image, a version or a port, edit `compose.yaml`; if you change a po
 ### Using a real storage account
 
 1. In `.env`, replace the `STORAGE_CONNECTION_STRING` value with the account's connection string, from the Azure portal: Storage account > Security + networking > Access keys.
-2. Run option 1. The menu shows the account's name in yellow while the monitor is set to anything but Azurite.
+2. Run option 1. While the monitor is set to anything but Azurite, the menu and the output of option 1 show the account's name in yellow and its Blob, Queue and Table endpoints. `Conn str` names the setting in `.env` instead of printing it, because it holds the key. Azurite's ports and data folder are listed last and marked as the separate local emulator. A connection string with no `AccountName`, like a SAS one, shows `account: see .env` and only the endpoints it sets.
 3. To go back, delete `.env` and run option 1.
 
 This only changes what the monitor shows. Azurite keeps running, and your apps keep using whatever connection string they are set to.
